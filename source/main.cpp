@@ -11,14 +11,87 @@ float sensors[10];
 
 
 typedef struct {
-	int x;
-	int y;
-	int xSpeed;
-	int ySpeed;
-} Circle;
+	float x0;
+	float y0;
+	float x;
+	float y;
+	float vx;
+	float vy;
+} Dot;
 
-const int circleCount = 6;
-Circle circles[circleCount];
+// TODO: Make configurable
+const tsl::Color dotColor = {0xF, 0xF, 0xF, 0x0F};
+const int dotSize = 10;
+const int dotsPerHorizontal = 10;
+const int dotsPerVertical = 5;
+const int dotCount = dotsPerVertical*2+dotsPerHorizontal*2-4; // corners are counted twice
+
+const float ACCEL_GAIN = 100000.0f;
+const float GYRO_GAIN = 10000.0f;    // tweak this
+// const float DAMPING = 8.0f;
+// const float SPRING = 5.0f;
+const float DAMPING = 50.0f;
+const float SPRING = 400.0f;
+const float MAX_DIST = 30.0f;     // max pixel offset
+
+Dot dots[dotCount];
+
+
+
+void updateDots(float dt) {
+    // float gx = g_sixState.angular_velocity.x;
+    // float gy = g_sixState.angular_velocity.y;
+	float ax = sensors[0];
+	float ay = -sensors[1];
+	float az = sensors[2];
+
+
+	// remove gravity using a slow filter (low-pass)
+	static float gxFilt = 0.0f, gyFilt = 0.0f, gzFilt = 1.0f;
+	const float alpha = 0.2f; // tweak (lower = smoother)
+	gxFilt = gxFilt * (1.0f - alpha) + ax * alpha;
+	gyFilt = gyFilt * (1.0f - alpha) + ay * alpha;
+	gzFilt = gzFilt * (1.0f - alpha) + az * alpha;
+
+	// Subtract gravity component
+	ax -= gxFilt;
+	ay -= gyFilt;
+	az -= gzFilt;
+	
+	info = std::format(
+		"linear Accel: x={:.4f} y={:.4f} z={:.4f}\nFilt: x={:.4f} y={:.4f} z={:.4f}",
+		ax,
+		ay,
+		az,
+		gxFilt,
+		gyFilt,
+		gzFilt
+	);
+
+    for (int i = 0; i < dotCount; ++i) {
+    	Dot &d = dots[i];
+
+		// Scale and invert: device moves right → dot moves left
+		float fx = -ax * ACCEL_GAIN - (d.x - d.x0) * SPRING - d.vx * DAMPING;
+		float fy = -ay * ACCEL_GAIN - (d.y - d.y0) * SPRING - d.vy * DAMPING;
+
+        d.vx += fx * dt;
+        d.vy += fy * dt;
+
+        d.x += d.vx * dt;
+        d.y += d.vy * dt;
+
+    	// limit movement
+        float dx = d.x - d.x0;
+        float dy = d.y - d.y0;
+        float dist = sqrtf(dx*dx + dy*dy);
+        if (dist > MAX_DIST) {
+            float scale = MAX_DIST / dist;
+            d.x = d.x0 + dx * scale;
+            d.y = d.y0 + dy * scale;
+        }
+    }
+}
 
 void updateInput() {
 	padUpdate(&pad);
@@ -48,9 +121,9 @@ void updateInput() {
 
 
 		HidSevenSixAxisSensorState state[4];
-		size_t* total_out;
+		size_t total_out = 0;
 
-		hidGetSevenSixAxisSensorStates(state, 1, total_out);
+		hidGetSevenSixAxisSensorStates(state, 1, &total_out);
 		//hidIsSevenSixAxisSensorAtRest(&res);
 		//info = std::format("{}", state[0].unk_x18[0]);
 		//sensors = state[0].unk_x18;
@@ -97,16 +170,15 @@ void initInput() {
 }
 
 
+// auto color = tsl::style::color::ColorHighlight;
+tsl::Color red = tsl::Color{0xF, 0x0, 0x0, 0xF};
+tsl::Color blue = tsl::Color{0x0, 0x0, 0xF, 0xF};
+tsl::Color white = tsl::Color{0xF, 0xF, 0xF, 0xF};
+int font_size = 20;
 
 
 void renderDots(tsl::gfx::Renderer* r, s32 x, s32 y, s32 w, s32 h) {
 	r->disableScissoring();
-
-	// auto color = tsl::style::color::ColorHighlight;
-	tsl::Color red = tsl::Color{0xF, 0x0, 0x0, 0xF};
-	tsl::Color blue = tsl::Color{0x0, 0x0, 0xF, 0xF};
-	tsl::Color white = tsl::Color{0xF, 0xF, 0xF, 0xF};
-	
 
 	float gx = g_sixState.angular_velocity.x;
 	float gy = g_sixState.angular_velocity.y;
@@ -120,51 +192,88 @@ void renderDots(tsl::gfx::Renderer* r, s32 x, s32 y, s32 w, s32 h) {
 	float ay = g_sixState.acceleration.y;
 	float az = g_sixState.acceleration.z;
 
+	auto six_sensor_string = std::format(
+		"Gyro: x={:.4f} y={:.4f} z={:.4f}\nAccel: x={:.4f} y={:.4f} z={:.4f}\nAngle: x={:.4f} y={:.4f} z={:.4f}\nError: {}\nx: {} y: {}\ninfo:\n{}", 
+		gx, gy, gz, ax, ay, az, anx, any, anz, error_message, x, y, info
+	);
 
+	auto seven_sensor_string = std::format(
+		"Accel x: {:.4f}\nAccel y: {:.4f}\nAccel z: {:.4f}\nGyro x: {:.4f}\nGyro y: {:.4f}\nGyro z: {:.4f}\nAngle x: {:.4f}\nAngle y: {:.4f}\nAngle z: {:.4f}\n9: {:.4f}", 
+		sensors[0], // accel x
+		sensors[1], // accel y
+		sensors[2], // accel z
+		sensors[3], // gyro x
+		sensors[4], // gyro y
+		sensors[5], // gyro z
+		sensors[6], // angle x
+		sensors[7], // angle y
+		sensors[8], // angle z
+		sensors[9]  // ?
+	);
 
-	auto font_size = 20;
+	// Best solution is probably a spring
+	// Also movement should be based on delta time
+	// To have less speed than 1, we can use floats and
+	// accumulate the movement until it reaches 1 and then move by 1 pixel
+	static u64 lastTime = 0;
+	u64 now = armGetSystemTick();
+	float dt = (now - lastTime) / 19200000.0f; // convert ticks to seconds
+	lastTime = now;
 
-//auto info = (&pad);
+	updateDots(dt);
 
-	//char buf[64];
-    	//snprintf(buf, sizeof(buf), "Gyro X: %.2f", g_sixState.angular_velocity.x);
-		//r->drawString(buf, false, x + 20, y + 40, 20, r->a(white));
+	// for (int i = 0; i < dotCount; ++i) {
+	// 	// Update dot speed based on gyro
+	// 	dots[i].vx = static_cast<int>(sensors[0]*30);
+	// 	dots[i].vy = static_cast<int>(-sensors[1]*30);
+
+	// 	// Update dot position
+	// 	int oldX = dots[i].x;
+	// 	int oldY = dots[i].y;
+
+	// 	dots[i].x += dots[i].vx;
+	// 	dots[i].y += dots[i].vy;
+
+	// 	if (dots[i].x < 0 || dots[i].x > tsl::cfg::FramebufferWidth) {
+	// 		dots[i].vx = -dots[i].vx;
+	// 		dots[i].x = oldX;
+	// 	}
+
+	// 	if (dots[i].y < 0 || dots[i].y > tsl::cfg::FramebufferHeight) {
+	// 		dots[i].vy = -dots[i].vy;
+	// 		dots[i].y = oldY;
+	// 	}
 		
-	//auto text_string = std::format("X pos: {}, Y pos: {}\n Gyro: x={:.4f} y={:.4f} z={:.4f} \n Accel: x={:.4f} y={:.4f} z={:.4f} \n Angle: x={:.4f} y={:.4f} z={:.4f}\nError: {}, \info: {} ", x, y, gx, gy, gz, ax, ay, az, anx, any, anz, error_message, info);
+	// 	//dots[i].y += dot.vy;
+	// 	dots[i].vx -= abs(dots[i].x - dots[i].x0);
 
-	auto text_string = std::format("Gyro: x={:.4f} y={:.4f} z={:.4f}\nAccel: x={:.4f} y={:.4f} z={:.4f}\nAngle: x={:.4f} y={:.4f} z={:.4f}\nError: {}\nx: {} y: {}", gx, gy, gz, ax, ay, az, anx, any, anz, error_message, x, y);
-	//
-	auto sensor_string = std::format("Accel x: {:.4f}\nAccel y: {:.4f}\nAccel z: {:.4f}\nGyro x: {:.4f}\nGyro y: {:.4f}\nGyro z: {:.4f}\nAngle x: {:.4f}\nAngle y: {:.4f}\nAngle z: {:.4f}\n9: {:.4f}", 
-					sensors[0], // accel x
-					sensors[1], // accel y
-					sensors[2], // accel z
-					sensors[3], // gyro x
-					sensors[4], // gyro y
-					sensors[5], // gyro z
-					sensors[6], // angle x
-					sensors[7], // angle y
-					sensors[8], // angle z
-					sensors[9]);// ?
-
-	const char* text = text_string.c_str();
+	// }
+	
 
     std::string circleText;
 
-	r->drawRect(0, 0, 1280, 100, r->a(blue));
+	//r->drawRect(0, 0, 1280, 100, r->a(blue));
+
 	r->drawCircle(tsl::cfg::FramebufferWidth/2, tsl::cfg::FramebufferHeight/2, 20, true, r->a(white));
-    for (Circle circle : circles) {
-        circleText += std::format("x: {}, y: {}\n", circle.x, circle.y);
-	    r->drawCircle(circle.x, circle.y, 20, true, r->a(white));
+    for (int i = 0; i < dotCount; ++i) {
+        circleText += std::format("{}: x: {:.2f}, y: {:.2f}, sx: {:.2f}, sy: {:.2f}\n", i, dots[i].x, dots[i].y, dots[i].vx, dots[i].vy);
+		float dx = dots[i].x - dots[i].x0;
+		float dy = dots[i].y - dots[i].y0;
+		float d_total = sqrtf(dx*dx + dy*dy);
+
+	    r->drawCircle(dots[i].x, dots[i].y, dotSize*(1-(d_total / MAX_DIST)), true, r->a(dotColor));
     }
 
+	// DEBUG TEXT
 
-	const char* c_text = circleText.c_str();
-	r->drawString(c_text, false, 800, y+font_size, font_size, r->a(white));
+	// const char* c_circleText = circleText.c_str();
+	// r->drawString(c_circleText, false, 800, y+font_size, font_size, r->a(white));
 
-	r->drawString(text, false, x + 0, y + font_size, font_size, r->a(white));
+	// const char* c_six_sensor_string = six_sensor_string.c_str();
+	// r->drawString(c_six_sensor_string, false, x + 0, y + font_size, font_size, r->a(white));
 
-	const char* text2 = sensor_string.c_str();
-	r->drawString(text2, false, x + 0, y + font_size+200, font_size, r->a(white));
+	// const char* c_seven_sensor_string = seven_sensor_string.c_str();
+	// r->drawString(c_seven_sensor_string, false, x + 0, y + font_size+200, font_size, r->a(white));
 
     r->enableScissoring(0, 0, 0, 0);
 }
@@ -177,7 +286,8 @@ class EmptyOverlayFrame: public tsl::elm::OverlayFrame {
 						//this->setBoundaries(0, 0, 100, 200);
 						//renderer->disableScissoring();
 
-						renderer->fillScreen(a({0x0, 0x0, 0x0, 0xD}));
+						// BACKGROUN FILL, default: 0xD
+						renderer->fillScreen(a({0x0, 0x0, 0x0, 0x0}));
 						//renderer->drawString("hello", false, 20, 20, 20, a({0xFF, 0xFF, 0xFF, 0xFF}));
 						
 						if (this->m_contentElement != nullptr)
@@ -204,35 +314,50 @@ public:
 	//initInput();
 
         int padding = 50;
-        int initialX = padding;
-        int initialY = padding;
-        int width = tsl::cfg::FramebufferWidth - padding;
-        int height = tsl::cfg::FramebufferHeight - padding;
+        int x0 = padding;
+        int y0 = padding;
+        int width = tsl::cfg::FramebufferWidth - padding*2;
+        int height = tsl::cfg::FramebufferHeight - padding*2;
 
-        int perimeter = width*2 + height*2;
-        s32 circleOffset = perimeter / circleCount;
 
-        for (int i = 0; i < circleCount; ++i) {
-            float dist = i * circleOffset;
-            float px, py;
+		int index = 0;
 
-            if (dist <= width) { // top edge
-                px = initialX + dist;
-                py = initialY;
-            } else if (dist <= width + height) { // right edge
-                px = initialX + width;
-                py = initialY + (dist - width) - padding;
-            } else if (dist <= 2 * width + height) { // bottom edge
-                px = initialX + width - (dist - (width + height));
-                py = initialY + height;
-            } else { // left edge
-                px = initialX;
-                py = initialY + height - (dist - (2 * width + height));
-            }
+		auto addDot = [&](int x, int y) {
+			dots[index].x = x;
+			dots[index].y = y;
+			dots[index].x0 = x;
+			dots[index].y0 = y;
+			dots[index].vx = 0;
+			dots[index].vy = 0;
+			++index;
+		};
 
-            circles[i].x = px;
-            circles[i].y = py;
-        }
+		// top/bottom edge
+		for (int i = 0; i < dotsPerHorizontal; ++i) {
+			float t = static_cast<float>(i) / (dotsPerHorizontal - 1);
+			addDot(x0 + static_cast<int>(std::round(t * width)), y0);
+			addDot(x0 + static_cast<int>(std::round(t * width)), y0 + height);
+		}
+
+		// right/left edge
+		for (int i = 1; i < dotsPerVertical; ++i) {
+			float t = static_cast<float>(i) / (dotsPerVertical - 1);
+			addDot(x0+width, y0 + static_cast<int>(std::round(t * height)));
+			addDot(x0, y0 + static_cast<int>(std::round(t * height)));
+		}
+
+		std::string file_text;
+
+        for (int i = 0; i < dotCount; ++i) {
+			file_text += std::format("{}: x: {:.2f}, y: {:.2f}\n", i, dots[i].x, dots[i].y);
+		}
+
+		FILE *f = fopen("sdmc:/hello.txt", "w");
+		const char* text = file_text.c_str();
+		if (f) {
+			fprintf(f, "%s", text);
+			fclose(f);
+		}
 
         // A OverlayFrame is the base element every overlay consists of. This will draw the default Title and Subtitle.
         // If you need more information in the header or want to change it's look, use a HeaderOverlayFrame.
@@ -268,8 +393,35 @@ public:
 				//return true;
 			}
 		// info = std::format("{}", padGetButtonsDown(&pad));
-		return true;
+		return true; //TODO: CHANGE TO TRUE
     }
+};
+
+class MenuGui : public tsl::Gui {
+	public:
+		MenuGui() {}
+
+		virtual tsl::elm::Element* createUI() override {
+			auto frame = new tsl::elm::OverlayFrame("NX-Dots", "Menu");
+
+			auto list = new tsl::elm::List();
+			auto start_item = new tsl::elm::ListItem("Start Test Overlay");
+			start_item->setClickListener([](u64 keys){
+				if (keys & HidNpadButton_A) {
+					framebufferWidth = 1280;
+					framebufferHeight = 720;
+
+					tsl::changeTo<GuiTest>();
+					return true;
+				}
+				return false;
+			});
+			list->addItem(start_item);
+
+			frame->setContent(list);
+
+			return frame;
+		}
 };
 
 class OverlayTest : public tsl::Overlay {
@@ -278,9 +430,11 @@ public:
     virtual void initServices() override {
 		//tsl::hlp::requestForeground(false);
 		initInput();
+    	fsdevMountSdmc();
 	}  // Called at the start to initialize all services necessary for this Overlay
     virtual void exitServices() override {
 		hidFinalizeSevenSixAxisSensor();
+		fsdevUnmountAll();
 		//tsl::hlp::requestForeground(true);
 	}  // Callet at the end to clean up all services previously initialized
 

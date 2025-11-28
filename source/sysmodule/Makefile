@@ -37,16 +37,12 @@ include $(DEVKITPRO)/libnx/switch_rules
 #   of a homebrew executable (.nro). This is intended to be used for sysmodules.
 #   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
-APP_TITLE	:=	NX-Dots
-APP_VERSION :=	0.1.0
-
-TARGET		:=	$(notdir $(CURDIR))
+TARGET		:=	sys-con
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source ../ControllerSwitch ../ControllerLib ../ControllerLib/Controllers ../inih
 DATA		:=	data
-INCLUDES	:=	include libs/libtesla/include
-
-NO_ICON		:=  1
+INCLUDES	:=	include ../ControllerSwitch ../ControllerLib ../inih
+#ROMFS	:=	romfs
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -58,7 +54,7 @@ CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
-CXXFLAGS	:= $(CFLAGS) -fno-exceptions -std=c++20
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++23
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -164,14 +160,18 @@ endif
 #---------------------------------------------------------------------------------
 all: $(BUILD)
 
-
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
 clean:
-	@rm -fr $(BUILD) $(TARGET).ovl $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@echo clean ...
+ifeq ($(strip $(APP_JSON)),)
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+else
+	@rm -fr $(BUILD) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+endif
 
 
 #---------------------------------------------------------------------------------
@@ -183,11 +183,25 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-all	:	 $(OUTPUT).ovl
+ifeq ($(strip $(APP_JSON)),)
 
-$(OUTPUT).ovl		:	$(OUTPUT).elf $(OUTPUT).nacp 
-	@elf2nro $< $@ $(NROFLAGS)
-	@echo "built ... $(notdir $(OUTPUT).ovl)"
+all	:	$(OUTPUT).nro
+
+ifeq ($(strip $(NO_NACP)),)
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+else
+$(OUTPUT).nro	:	$(OUTPUT).elf
+endif
+
+else
+
+all	:	$(OUTPUT).nsp
+
+$(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
+
+$(OUTPUT).nso	:	$(OUTPUT).elf
+
+endif
 
 $(OUTPUT).elf	:	$(OFILES)
 
